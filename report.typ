@@ -1,0 +1,412 @@
+#set document(title: "Лабораторная работа №5. Proxmox VE")
+#set page(paper: "a4", margin: (left: 2.5cm, right: 1.5cm, y: 2cm))
+#set text(font: "Times New Roman", size: 14pt, lang: "ru", region: "RU")
+
+// ---------- Титульный лист ----------
+#align(center)[
+  #text(weight: "bold")[Федеральное государственное автономное образовательное учреждение высшего образования] \
+  #text(weight: "bold")[«Национальный исследовательский университет ИТМО»]
+
+  #v(0.4cm)
+  Факультет программной инженерии и компьютерной техники
+
+  #v(4.5cm)
+  #text(size: 20pt, weight: "bold")[Отчёт по лабораторной работе №5]
+
+  #v(0.4cm)
+  по дисциплине «Технологии виртуализации»
+
+  #v(0.4cm)
+  Тема: «Знакомство с Proxmox VE. Управление виртуальными машинами и LXC-контейнерами»
+]
+
+#v(1fr)
+#align(right)[
+  #set text(size: 12pt)
+  #table(
+    columns: 2, stroke: none, align: (right, left), inset: 3pt,
+    [*Выполнил:*], [Силаев З.А.],
+    [*Группа:*], [P3410],
+    [*Преподаватель:*], [Адмакин Максим Александрович],
+  )
+]
+#v(1fr)
+#align(center, text(size: 12pt)[Санкт-Петербург, 2026])
+
+#pagebreak()
+
+// ---------- Оформление основной части ----------
+#set page(numbering: "1", number-align: center + bottom)
+#set par(justify: true, first-line-indent: (amount: 1.25cm, all: true), leading: 0.5em, spacing: 0.6em)
+#set heading(numbering: "1.1.")
+#show heading: it => block(above: 1.3em, below: 0.7em, sticky: true)[
+  #set par(first-line-indent: 0pt, justify: false)
+  #set text(size: if it.level == 1 { 15pt } else { 14pt }, weight: "bold")
+  #it
+]
+#show heading.where(level: 1): it => {
+  pagebreak(weak: true)
+  it
+}
+#set raw(theme: none)
+#show raw: set text(font: ("Menlo", "Courier New"), size: 8.5pt)
+#show raw.where(block: true): it => block(
+  width: 100%, breakable: true, inset: 7pt, radius: 2pt,
+  stroke: (left: 1.5pt + luma(150)), fill: luma(246),
+)[
+  #set par(first-line-indent: 0pt, justify: false, leading: 0.3em)
+  #it
+]
+#set table(inset: 5pt, stroke: 0.5pt, align: left + horizon)
+#show table: set text(size: 11pt)
+#show table: set par(first-line-indent: 0pt, justify: false)
+#show table.cell.where(y: 0): set text(weight: "bold")
+#show figure.where(kind: table): set figure.caption(position: top)
+#show figure.where(kind: image): set text(size: 10pt)
+#show figure.caption: set text(size: 12pt)
+#show figure.caption: set par(first-line-indent: 0pt)
+#set figure(supplement: it => if it.func() == table [Таблица] else [Рисунок])
+#set list(indent: 1.25cm, marker: [–])
+#set enum(indent: 1.25cm)
+#show figure: set block(above: 1em, below: 1em)
+
+// Скриншоты: список готовых файлов пишет build-report.sh в screens/ready.txt.
+// Если файла ещё нет, на его месте пунктирная рамка с именем.
+#let ready = read("screens/ready.txt").split("\n").map(s => s.trim()).filter(s => s != "")
+#let shot(name, caption, width: 100%) = figure(
+  if name in ready {
+    image("screens/" + name, width: width)
+  } else {
+    rect(width: 100%, height: 5cm, stroke: (paint: luma(140), dash: "dashed"),
+      align(center + horizon, text(fill: luma(110))[Скриншот: #raw(name)]))
+  },
+  kind: image,
+  caption: caption,
+)
+#let listing(path, lang) = raw(read(path), block: true, lang: lang)
+
+#outline(title: [Содержание], indent: auto)
+
+= Цель работы
+
+Освоить базовую установку и настройку Proxmox VE, создать виртуальную машину и системный
+LXC-контейнер, настроить сетевое взаимодействие между ними и проверить доступ к внешней сети.
+
+Планируемые результаты:
+- установить Proxmox VE в виртуальной машине и получить доступ к веб-интерфейсу;
+- создать Linux bridge и настроить маршрутизацию с трансляцией сетевых адресов (NAT);
+- создать виртуальную машину с Debian и LXC-контейнер с Alpine Linux;
+- назначить статические IP-адреса, проверить доступ в интернет и связь между гостевыми
+  системами;
+- настроить SSH-доступ к виртуальной машине.
+
+= Среда выполнения
+
+Работа выполнялась на компьютере с macOS 15 и процессором Apple M3 Pro. Proxmox VE установлен
+в виртуальную машину с включённой вложенной аппаратной виртуализацией (@tbl-env). Процессор
+основного компьютера имеет архитектуру ARM, поэтому использованы сборки для arm64: Proxmox VE
+9.2 (arm64), Debian 13 (arm64) и Alpine Linux для aarch64. Порядок настройки, команды и сетевая
+схема от архитектуры не зависят и совпадают с заданием.
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    table.header([Параметр], [Значение]),
+    [Основной компьютер], [macOS 15, Apple M3 Pro, 36 ГБ ОЗУ],
+    [VM Proxmox VE], [4 виртуальных процессора, 8 ГБ ОЗУ, диск 64 ГБ, вложенная виртуализация включена],
+    [Proxmox VE], [9.2 (arm64)],
+    [VM 100, Debian], [Debian 13 (arm64), 1 сокет, 1 ядро, 2048 МиБ, диск 32 ГиБ],
+    [CT 200, Alpine], [Alpine Linux (aarch64), 1 ядро, 256 МиБ, диск 2 ГиБ, непривилегированный],
+  ),
+  caption: [Используемая среда],
+) <tbl-env>
+
+Во всех частях используется единая схема адресации (@tbl-net). DNS гостевых систем 1.1.1.1.
+
+#figure(
+  table(
+    columns: (1fr, auto, 1fr),
+    table.header([Узел / интерфейс], [Сеть], [Адрес / назначение]),
+    [Адаптер 1 Proxmox, мост vmbr0], [общая сеть с NAT], [внешний интерфейс, выход в интернет],
+    [Адаптер 2 Proxmox, мост vmbr1], [только хост], [внутренняя сеть, 10.10.10.1/24],
+    [Основной компьютер], [только хост], [10.10.10.254/24, без шлюза],
+    [VM 100 Debian], [vmbr1], [10.10.10.10/24, шлюз 10.10.10.1],
+    [CT 200 Alpine], [vmbr1], [10.10.10.20/24, шлюз 10.10.10.1],
+  ),
+  caption: [Схема адресации],
+) <tbl-net>
+
+= Часть 1. Установка Proxmox VE и настройка сети
+
+== Подготовка виртуальной машины
+
+Для виртуальной машины Proxmox VE настроены два сетевых адаптера: первый подключён к общей
+сети с NAT и даёт Proxmox VE доступ в интернет, второй к изолированной сети «только хост»,
+доступной основному компьютеру (@fig-adapters). В параметрах процессора включена вложенная
+виртуализация, без которой гипервизор KVM внутри Proxmox VE не сможет использовать аппаратное
+ускорение (@fig-nested).
+
+#shot("01-adapters.png", [Сетевые адаптеры виртуальной машины Proxmox VE]) <fig-adapters>
+#shot("02-nested.png", [Включённая вложенная виртуализация]) <fig-nested>
+
+На основном компьютере интерфейсу сети «только хост» назначен адрес 10.10.10.254 с маской
+255.255.255.0 без шлюза по умолчанию.
+
+== Установка Proxmox VE
+
+Proxmox VE установлен с ISO-образа на весь виртуальный диск. Для управляющей сети выбран первый
+интерфейс; адрес, маска, шлюз и DNS получены в сети NAT и сохранены (@fig-installer). Этот
+интерфейс стал портом моста vmbr0.
+
+#shot("03-installer-net.png", [Настройка управляющей сети при установке]) <fig-installer>
+
+После установки в консоли определены имена интерфейсов и интерфейс, через который проходит
+маршрут в интернет (@fig-iplink). Первый адаптер получил имя enp0s5 и входит в vmbr0, второй
+адаптер называется enp0s6 и пока не используется.
+
+```bash
+ip -br link
+ip route get 77.88.8.8
+```
+
+#shot("04-ip-link.png", [Сетевые интерфейсы и маршрут во внешнюю сеть]) <fig-iplink>
+
+== Внутренний мост vmbr1
+
+Перед изменением сохранена резервная копия сетевой конфигурации, затем в файл
+/etc/network/interfaces добавлены второй интерфейс и мост vmbr1 с адресом 10.10.10.1/24.
+Строки post-up и post-down при поднятии моста добавляют, а при его остановке удаляют правило
+NAT: пакеты из сети 10.10.10.0/24, уходящие через vmbr0, получают адрес Proxmox VE
+(маскарадинг).
+
+```bash
+cp /etc/network/interfaces /etc/network/interfaces.bak
+nano /etc/network/interfaces
+```
+
+#listing("configs/vmbr1.conf", "text")
+
+#shot("05-interfaces.png", [Файл /etc/network/interfaces с мостами vmbr0 и vmbr1]) <fig-interfaces>
+
+== Маршрутизация и применение настроек
+
+Пересылка IPv4-пакетов включена на постоянной основе отдельным файлом в /etc/sysctl.d,
+настройки сети применены без перезагрузки узла командой ifreload:
+
+```bash
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-pve-lab.conf
+sysctl --system
+ifreload -a
+ip -br address
+ip route
+sysctl net.ipv4.ip_forward
+iptables -t nat -S POSTROUTING
+```
+
+Мост vmbr1 поднят с адресом 10.10.10.1/24, пересылка включена (net.ipv4.ip_forward = 1), в
+цепочке POSTROUTING таблицы nat присутствует правило MASQUERADE для сети 10.10.10.0/24
+(@fig-nat).
+
+#shot("06-forward-nat.png", [Адреса, маршруты, ip_forward и правило NAT]) <fig-nat>
+
+С основного компьютера узел Proxmox VE доступен во внутренней сети (@fig-hostping), а
+веб-интерфейс открывается по адресу https:/\/10.10.10.1:8006 (@fig-webui).
+
+#shot("07-host-ping.png", [Проверка доступности 10.10.10.1 с основного компьютера]) <fig-hostping>
+#shot("08-webui.png", [Веб-интерфейс Proxmox VE]) <fig-webui>
+
+= Часть 2. Создание виртуальной машины
+
+== Загрузка ISO-образа
+
+В хранилище local, поддерживающее содержимое типа ISO image, загружен установочный образ
+Debian 13 (@fig-iso).
+
+#shot("09-iso.png", [ISO-образ Debian в хранилище local]) <fig-iso>
+
+== Создание виртуальной машины
+
+Виртуальная машина создана мастером Create VM с параметрами из задания (@tbl-vm, @fig-vm). Для
+архитектуры arm64 гостевая система загружается через UEFI, поэтому выбрана прошивка OVMF и
+добавлен EFI-диск.
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    table.header([Параметр], [Значение]),
+    [VM ID / Name], [100 / SilaevZahar],
+    [OS / ISO image], [Debian 13 (arm64), тип Linux],
+    [BIOS], [OVMF (UEFI), EFI-диск в local-lvm],
+    [Disk size], [32 GiB],
+    [Sockets / Cores], [1 / 1],
+    [Memory], [2048 MiB],
+    [Network], [мост vmbr1, модель VirtIO (paravirtualized)],
+  ),
+  caption: [Параметры виртуальной машины],
+) <tbl-vm>
+
+#shot("10-vm-params.png", [Параметры VM 100 перед созданием]) <fig-vm>
+
+== Установка Debian
+
+Виртуальная машина запущена с подключённым ISO-образом, установка выполнена через консоль
+веб-интерфейса. В сетевых настройках выбрана ручная конфигурация IPv4: адрес 10.10.10.10, маска
+255.255.255.0, шлюз 10.10.10.1, DNS 1.1.1.1 (@fig-debip). После установки ISO-образ отключён,
+чтобы система загружалась с виртуального диска.
+
+#shot("11-debian-ip.png", [Ручная настройка IPv4 в установщике Debian]) <fig-debip>
+
+== Проверка сети
+
+После входа в установленную систему проверены адрес, маршрут и доступность шлюза, внешнего
+IP-адреса и доменного имени:
+
+```bash
+ip -br address
+ip route
+ping -c 4 10.10.10.1
+ping -c 4 77.88.8.8
+ping -c 4 ya.ru
+```
+
+Интерфейс получил адрес 10.10.10.10/24, маршрут по умолчанию идёт через 10.10.10.1, все три
+проверки прошли без потерь (@fig-vmnet). Успешный ping по имени ya.ru подтверждает работу DNS.
+
+#shot("12-vm-net.png", [Сетевые параметры VM и проверка внешней сети]) <fig-vmnet>
+
+Трассировка до 77.88.8.8 показывает, что первым узлом маршрута является мост vmbr1 узла
+Proxmox VE (10.10.10.1), дальше пакеты проходят через сеть NAT основного компьютера
+(@fig-vmtrace).
+
+```bash
+apt install traceroute
+traceroute 77.88.8.8
+```
+
+#shot("13-vm-traceroute.png", [Трассировка маршрута из виртуальной машины]) <fig-vmtrace>
+
+= Часть 3. Создание LXC-контейнера
+
+== Загрузка шаблона
+
+В хранилище local в разделе CT Templates загружен актуальный шаблон Alpine Linux (@fig-tpl).
+
+#shot("14-template.png", [Шаблон Alpine Linux в хранилище local]) <fig-tpl>
+
+== Создание контейнера
+
+Контейнер создан мастером Create CT (@tbl-ct, @fig-ct). Контейнер непривилегированный: root
+внутри контейнера отображается на непривилегированного пользователя узла, что повышает
+изоляцию. Пароль root задан при создании и в отчёте не приводится.
+
+#figure(
+  table(
+    columns: (auto, 1fr),
+    table.header([Параметр], [Значение]),
+    [CT ID / Hostname], [200 / ct-test],
+    [Template], [Alpine Linux (aarch64)],
+    [Disk size], [2 GiB],
+    [Cores / Memory], [1 / 256 MiB],
+    [Unprivileged container], [включено],
+    [Network], [мост vmbr1, IPv4 10.10.10.20/24, шлюз 10.10.10.1],
+    [DNS], [1.1.1.1],
+  ),
+  caption: [Параметры контейнера],
+) <tbl-ct>
+
+#shot("15-ct-params.png", [Параметры CT 200 перед созданием]) <fig-ct>
+
+== Запуск и проверка
+
+Контейнер запущен и открыта его командная оболочка, затем проверены адрес, маршрут и
+доступность внешней сети:
+
+```bash
+pct start 200
+pct enter 200
+ip a
+ip route
+ping -c 4 10.10.10.1
+ping -c 4 77.88.8.8
+ping -c 4 ya.ru
+```
+
+Контейнер получил адрес 10.10.10.20/24, маршрут по умолчанию идёт через 10.10.10.1, шлюз,
+внешний адрес и доменное имя доступны (@fig-ctnet).
+
+#shot("16-ct-net.png", [Сетевые параметры контейнера и проверка внешней сети]) <fig-ctnet>
+
+В контейнер установлена утилита traceroute и выполнена трассировка (@fig-cttrace). Отдельные
+узлы маршрута могут не отвечать и отображаться символом «\*», но успешный ping конечного
+адреса и разрешение имени показывают, что внешняя сеть доступна.
+
+```bash
+apk add --no-cache traceroute
+traceroute 77.88.8.8
+```
+
+#shot("17-ct-traceroute.png", [Трассировка маршрута из контейнера]) <fig-cttrace>
+
+= Часть 4. Связь между контейнером и виртуальной машиной
+
+Виртуальная машина Debian и контейнер Alpine подключены к одному мосту vmbr1 и находятся в
+подсети 10.10.10.0/24. Из контейнера выполнен ping виртуальной машины, а из виртуальной машины
+ping контейнера:
+
+```bash
+pct enter 200
+ping -c 4 10.10.10.10      # из контейнера
+ping -c 4 10.10.10.20      # из Debian
+```
+
+Обе проверки прошли без потерь пакетов (@fig-ct2vm, @fig-vm2ct): гостевые системы
+обмениваются пакетами напрямую через мост, без участия NAT.
+
+#shot("18-ping-ct-vm.png", [Ping виртуальной машины из контейнера]) <fig-ct2vm>
+#shot("19-ping-vm-ct.png", [Ping контейнера из виртуальной машины]) <fig-vm2ct>
+
+= Часть 5. Подключение к виртуальной машине по SSH
+
+В Debian установлен сервер OpenSSH, служба включена в автозагрузку и запущена:
+
+```bash
+apt update
+apt install -y openssh-server
+systemctl enable --now ssh
+systemctl status ssh --no-pager
+ss -tlnp | grep ':22'
+```
+
+Служба ssh находится в состоянии active (running) и принимает соединения на TCP-порту 22
+(@fig-sshstatus).
+
+#shot("20-ssh-status.png", [Состояние службы SSH в Debian]) <fig-sshstatus>
+
+С основного компьютера, имеющего адрес в сети 10.10.10.0/24, выполнено подключение под обычным
+пользователем Debian (@fig-sshmac). Вход под root по паролю в Debian по умолчанию запрещён,
+поэтому используется обычная учётная запись.
+
+```bash
+ssh zahar@10.10.10.10
+```
+
+#shot("21-ssh-mac.png", [Подключение к Debian по SSH с основного компьютера]) <fig-sshmac>
+
+= Заключение
+
+В работе Proxmox VE 9.2 установлен в виртуальную машину с вложенной аппаратной
+виртуализацией, веб-интерфейс доступен с основного компьютера по адресу 10.10.10.1:8006. Создан
+внутренний мост vmbr1 с адресом 10.10.10.1/24, включена пересылка IPv4 и настроен маскарадинг,
+через который гостевые системы выходят во внешнюю сеть через мост vmbr0.
+
+Созданы виртуальная машина 100 с Debian 13 и непривилегированный LXC-контейнер 200 с Alpine
+Linux, им назначены статические адреса 10.10.10.10 и 10.10.10.20. Успешно пройдены все проверки:
+доступ к шлюзу, внешнему адресу и доменному имени из обеих гостевых систем, трассировка
+маршрута, обмен пакетами между виртуальной машиной и контейнером в обоих направлениях,
+подключение по SSH к Debian с основного компьютера.
+
+Особенностью работы стала архитектура основного компьютера: на процессоре ARM пришлось
+использовать сборки Proxmox VE, Debian и Alpine для arm64, а виртуальной машине Debian
+потребовались прошивка UEFI и EFI-диск. Сравнение показало разницу двух подходов: виртуальной
+машине нужны собственное ядро, установка ОС и заметно больше ресурсов, тогда как контейнер
+создаётся из готового шаблона за секунды, использует ядро узла и работает с 256 МиБ памяти.
