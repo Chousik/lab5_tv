@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Лабораторная работа 5 «Proxmox VE» (Mac M3 Pro, Parallels Desktop): шпаргалка по шагам.
+# Лабораторная работа 5 «Proxmox VE» (Mac M3 Pro, VirtualBox): шпаргалка по шагам.
 #
 #   ./lab.sh          все части по порядку
-#   ./lab.sh 0        подготовка Parallels и ISO
+#   ./lab.sh 0        подготовка VirtualBox и ISO
 #   ./lab.sh 1        часть 1 (и так далее до 5)
 #   ./lab.sh 2 3      части 2 и 3
 #
@@ -28,23 +28,21 @@ cmds()  { printf '\n'; cat; printf '\n'; }
 
 # ---------- Часть 0 ----------
 part0() {
-    step "Часть 0. Parallels Desktop и ISO"
-    note "Скачай ISO: Proxmox VE 9.2 arm64 (proxmox.com/en/downloads) и Debian 13 arm64 netinst"
-    note "(cdimage.debian.org/debian-cd/current/arm64/iso-cd/)."
-    note "Parallels: Создать → Установить из файла образа → ISO Proxmox → тип Other Linux, имя proxmox,"
-    note "галочка «Настроить параметры перед установкой»."
-    note "ЦП и память: 4 ЦП, 8192 МБ, Дополнительно → Включить вложенную виртуализацию. Диск 64 ГБ."
-    note "Сеть 1: Общая сеть. «+» → Сетевой адаптер → Сеть 2: Только хост."
-    shot 01-adapters.png "настройки VM: два сетевых адаптера (Общая сеть и Только хост)"
-    shot 02-nested.png "ЦП и память: включена вложенная виртуализация"
-    sub "Адрес Host-Only на Mac"
+    step "Часть 0. VirtualBox и ISO"
     where "на Mac"
     cmds <<'EOF'
-ifconfig | grep -B4 '10.37.129'
-sudo ifconfig vnic1 alias 10.10.10.254 netmask 255.255.255.0
-ifconfig vnic1
+brew install --cask virtualbox
 EOF
-    note "Если интерфейс Host-Only называется не vnic1, подставь его имя из первой команды."
+    note "Разреши расширение Oracle: Системные настройки → Конфиденциальность и безопасность."
+    note "Скачай ISO: Proxmox VE 9.2 arm64 (proxmox.com/en/downloads) и Debian 13 arm64 netinst"
+    note "(cdimage.debian.org/debian-cd/current/arm64/iso-cd/)."
+    note "Файл → Инструменты → Менеджер сетей → Сети хоста → Создать:"
+    note "маска 255.255.255.0, нижняя граница 10.10.10.200, верхняя 10.10.10.250."
+    note "Создать VM: имя proxmox, ISO Proxmox arm64, Linux / Debian (ARM 64-bit),"
+    note "«Пропустить автоматическую установку», 8192 МБ, 4 ЦП, диск 64 ГБ."
+    note "Сеть: Адаптер 1 NAT; Адаптер 2 Сеть хоста, Неразборчивый режим: Разрешить всё."
+    shot 01-adapters.png "вкладка Сеть: Адаптер 1 NAT и Адаптер 2 Сеть хоста"
+    shot 02-system.png "вкладка Система: память и процессоры"
 }
 
 # ---------- Часть 1 ----------
@@ -52,7 +50,8 @@ part1() {
     step "Часть 1. Установка Proxmox VE и сеть"
     sub "1.1. Установка"
     note "Install Proxmox VE (Graphical). Диск целиком, ext4. Russia / Europe/Moscow."
-    note "Management Network: ПЕРВЫЙ интерфейс (enp0s5), адрес из DHCP (10.211.55.x), hostname pve.lab.local."
+    note "Management Network: ПЕРВЫЙ интерфейс (NAT): 10.0.2.15/24, шлюз 10.0.2.2, hostname pve.lab.local."
+    note "Если после установки снова грузится ISO: выключи VM, Настройки → Носители → убери ISO."
     shot 03-installer-net.png "экран Management Network Configuration"
     where "в консоли Proxmox (root)"
     cmds <<'EOF'
@@ -102,10 +101,16 @@ sysctl net.ipv4.ip_forward
 iptables -t nat -S POSTROUTING
 EOF
     shot 06-forward-nat.png "vmbr1 10.10.10.1/24, ip_forward = 1, правило MASQUERADE"
-    where "на Mac"
+    sub "1.4. Адрес 10.10.10.254 на Mac"
+    where "на Mac (VM proxmox запущена)"
     cmds <<'EOF'
+ifconfig | grep -B6 'inet 10.10.10'
+EOF
+    note "Возьми имя интерфейса с адресом 10.10.10.200 (обычно bridge100) и подставь ниже."
+    cmds <<'EOF'
+sudo ifconfig bridge100 alias 10.10.10.254 netmask 255.255.255.0
 clear
-ifconfig vnic1 | grep inet
+ifconfig bridge100 | grep inet
 ping -c 4 10.10.10.1
 EOF
     shot 07-host-ping.png "на Mac адрес 10.10.10.254 и ответы от 10.10.10.1"
@@ -121,11 +126,12 @@ part2() {
     note "Create VM: ID 100, Name SilaevZahar, ISO debian-13 arm64, BIOS OVMF (UEFI) + EFI disk,"
     note "диск 32 GiB, Sockets 1, Cores 1, Memory 2048, Bridge vmbr1, Model VirtIO."
     shot 10-vm-params.png "вкладка Confirm с параметрами VM"
-    note "Start → Console. Сеть вручную: 10.10.10.10 / 255.255.255.0 / шлюз 10.10.10.1 / DNS 1.1.1.1."
+    note "Start → Console (установка медленная, это эмуляция). Сеть вручную: 10.10.10.10 / 255.255.255.0 / шлюз 10.10.10.1 / DNS 1.1.1.1."
     shot 11-debian-ip.png "установщик Debian: ручной ввод IP"
     note "Создай обычного пользователя (например zahar). Программы: только standard system utilities."
     note "После установки: Hardware → CD/DVD → Do not use any media, затем Start."
-    note "Если ошибка KVM: Options → KVM hardware virtualization: No."
+    note "ДО ПЕРВОГО ЗАПУСКА: VM 100 → Options → KVM hardware virtualization: No (вложенной виртуализации нет)."
+    note "Чёрная консоль: Hardware → Display → Serial terminal 0, Console → xterm.js."
     where "в Debian (root)"
     cmds <<'EOF'
 clear
