@@ -55,7 +55,7 @@ part1() {
     shot 03-installer-net.png "экран Management Network Configuration"
     where "в консоли Proxmox (root)"
     cmds <<'EOF'
-clear
+
 ip -br link
 ip route get 77.88.8.8
 EOF
@@ -108,9 +108,9 @@ ifconfig | grep -B6 'inet 10.10.10'
 EOF
     note "Возьми имя интерфейса с адресом 10.10.10.200 (обычно bridge100) и подставь ниже."
     cmds <<'EOF'
-sudo ifconfig bridge100 alias 10.10.10.254 netmask 255.255.255.0
+sudo ifconfig bridge102 alias 10.10.10.254 netmask 255.255.255.0
 clear
-ifconfig bridge100 | grep inet
+ifconfig bridge102 | grep inet
 ping -c 4 10.10.10.1
 EOF
     shot 07-host-ping.png "на Mac адрес 10.10.10.254 и ответы от 10.10.10.1"
